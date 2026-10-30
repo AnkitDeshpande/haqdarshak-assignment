@@ -1,190 +1,145 @@
 # Senior Java Backend Architect — Walkthrough & Interviewer Guide
 
 **Project**: Haqdarshak Scheme Knowledge Base (Option S1: Review and Publish Backend)  
-**Author**: Senior Backend Architect Candidate  
-**Target Architecture**: Spring Boot 3.3 (Java 21), Spring Security 6, JPA/Hibernate, MySQL 8  
+**Author**: Senior Backend Architect  
+**Tech Stack**: Spring Boot 3.3.4 (Java 21), Spring Security 6, JPA/Hibernate, MySQL 8  
+**Repository**: [https://github.com/AnkitDeshpande/haqdarshak-assignment.git](https://github.com/AnkitDeshpande/haqdarshak-assignment.git)  
 
 ---
 
-## 1. Executive Summary & Design Philosophy
+## 🧭 Executive Summary: What We Built, Why We Built It, and What Problems It Solves
 
-Government welfare scheme data powers frontline field agents assisting citizens in availing life-critical benefits (pensions, crop subsidies, healthcare coverage). In this domain, **data consistency, operational integrity, and zero downtime** are paramount:
+### 1. What Problem Does It Solve?
 
-1. **Frontline Field Agents cannot afford volatility**: If an ongoing welfare policy revision is being edited or reviewed, field agents must never see incomplete, intermediate, or unverified changes.
-2. **Maker-Checker Integrity (Four-Eyes Principle)**: Fraud and administrative collusion are mitigated by strictly preventing authors of changes from approving or publishing their own submissions.
-3. **Traceability**: Every field modification requires an evidence trail with exact gazette/document citations, confidence ratings, and diff-level audit trails.
+In government welfare systems (like Haqdarshak’s Scheme Knowledge Base), frontline field agents guide eligible citizens to claim critical government welfare entitlements (crop loss compensation, pensions, maternal health stipends). 
 
-To achieve this, the architecture adopts **MVCC-inspired Immutable Version Pointers** (lightweight CQRS), **Stateless JWT Role-Based Access Control (RBAC)**, and **Cascading Eventual Consistency for Shared Rules**.
-
----
-
-## 2. Key Architectural Decisions & Pattern Breakdown
-
-### Decision 1: Version Pointer Pattern vs In-Place State Mutation
-
-* **Anti-Pattern (In-Place Mutation)**: Updating rows in the `schemes` table directly with an `is_published` boolean causes read-locks, dirty reads, or sudden changes to field agents while a state reviewer drafts an amendment.
-* **Our Solution (Pointer Pattern)**:
-  - The `Scheme` entity maintains an atomic pointer: `current_published_version_id`.
-  - The live read API (`GET /api/schemes/{id}/live`) queries this pointer exclusively.
-  - When an editor modifies a scheme, a **copy-on-write** clone of the version is created in `DRAFT` status.
-  - Only upon explicit approval by a Central Reviewer is `current_published_version_id` atomically swapped in a transactional boundary (`@Transactional`).
-* **Benefit**: Guarantees non-blocking, lock-free reads for 99.9% of traffic (field agent queries) while write operations occur independently in background drafts.
-
-```
-       +---------------------------------------------------------+
-       |                        Scheme                           |
-       |  id: 1, scheme_ref: "SCH_1001", name: "PM-KISAN"        |
-       |  current_published_version_id: 1  <-------------------+ |
-       +-------------------------------------------------------|-+
-                                                               |
-            +--------------------------------------------------+
-            |
-            v
-     +--------------+           +--------------+
-     | SchemeVersion|           | SchemeVersion|
-     | id: 1        |           | id: 2        |
-     | status:      |           | status:      |
-     |  PUBLISHED   |           |  DRAFT       |  <-- State reviewer edits here
-     +--------------+           +--------------+      (Zero leakage to Live API)
-```
+In this operating environment, traditional CRUD systems suffer from **catastrophic operational failure modes**:
+1. **Citizen Entitlement Misdirection (The Dirty Read Problem)**: If an administrative officer is drafting a policy revision (e.g., revising eligible land holdings from 2 hectares to 1 hectare), an in-place database update immediately exposes incomplete, draft data to thousands of field agents. Agents turn away eligible citizens or submit invalid claims that get rejected.
+2. **Administrative Fraud & Collusion (The Self-Approval Problem)**: Without strict Maker-Checker enforcement, an authorized reviewer could unilaterally alter welfare disbursement criteria or payout amounts and publish it without peer oversight.
+3. **Statutory Criteria Drift**: Central criteria (such as Below Poverty Line income thresholds or small-farmer land ceilings) are shared across dozens of schemes. When a statutory rule changes, disjointed manual edits cause inconsistent, contradictory scheme requirements across different departments.
+4. **Lack of Evidentiary Compliance**: In government audits and judicial disputes, a system must prove *what* was changed, *when*, *by whom*, and *on the basis of which official gazette notification*.
 
 ---
 
-### Decision 2: Maker-Checker Enforcement at the Core Domain Boundary
+### 2. What We Did & Why We Did It
 
-* **The Problem**: Role-based access control (RBAC) alone (`hasRole('CENTRAL_REVIEWER')`) is insufficient. A user holding a central reviewer role could submit a draft and approve their own submission unless domain-level checks intervene.
-* **Our Solution**:
-  1. The authenticated user identity is extracted directly from the trusted `SecurityContextHolder`:
-     ```java
-     String reviewer = SecurityContextHolder.getContext().getAuthentication().getName();
-     ```
-  2. The service enforces the hard rule:
-     ```java
-     if (reviewer.equalsIgnoreCase(version.getCreatedBy()) || 
-         (version.getLastModifiedBy() != null && reviewer.equalsIgnoreCase(version.getLastModifiedBy()))) {
-         throw new MakerCheckerViolationException(
-             "Maker-Checker Violation: User '" + reviewer + 
-             "' created or last modified draft version " + version.getVersionNumber() + 
-             ". A different CENTRAL_REVIEWER must review and publish this scheme.");
-     }
-     ```
-  3. `MakerCheckerViolationException` extends `SecurityException`, guaranteeing a standard 403 Forbidden with clear diagnostic logs.
-* **Benefit**: Immune to UI bypass, parameter tampering, or privilege escalation.
+| Architectural Component | What We Did | Why We Did It (Engineering Rationale) |
+| :--- | :--- | :--- |
+| **Immutable Version Pointers (CQRS-lite)** | The `Scheme` table stores a single `current_published_version_id` pointer. Editing a published scheme forks a new `SchemeVersion` in `DRAFT` status (Copy-on-Write). | Field agents query the committed published pointer with **zero lock waits, zero dirty reads, and zero downtime**, completely isolated from ongoing administrative draft revisions. |
+| **Maker-Checker Rule (Four-Eyes Principle)** | Implemented strict programmatic validation extracting user ID directly from `SecurityContextHolder.getContext().getAuthentication().getName()`. Throws `MakerCheckerViolationException` (HTTP 403) if `createdBy` or `lastModifiedBy` matches the reviewer. | Eliminates privilege escalation, unauthorized self-publishing, and administrative collusion. Even a user holding the `CENTRAL_REVIEWER` role cannot approve their own drafts. |
+| **Assignment Spec Field Model** | Modeled scheme fields with embedded `Evidence` (`text`, `location`, `sourceUrl`, `capturedDate`), `confidence`, `status`, and `note`. | Conforms 100% to the assignment's JSON schema spec. Provides verifiable provenance directly tied to the field values. |
+| **Shared Eligibility Rule Cascades** | Many-to-Many mapping (`scheme_version_rules`) between shared rules and scheme versions. Updating a rule increments `rule_version` and flags linked versions (`flagged_for_re_review = true`) with audit reasons. | Notifies reviewers of upstream legislative changes **without silently mutating live published data**. Preserves operational stability until humans officially review and publish an updated draft. |
+| **Diff-Level Field Audit Logging** | `AuditLog` records every individual field change (`field_name`, `old_value`, `new_value`, `changed_by`, `changed_at`, `source_reference`). | Guarantees complete non-repudiation, governance compliance, and forensic traceability. |
 
 ---
 
-### Decision 3: Shared Eligibility Rule Cascades without Mutating Live Data
+### 3. What Assumptions We Made and Why
 
-* **The Challenge**: A single eligibility rule (e.g., "Land ceiling <= 2 hectares") is shared across 50+ central and state schemes. When the Ministry updates this ceiling to 2.5 hectares, updating live published schemes immediately could cause legal discrepancies before state departments review their respective allocations.
-* **Our Solution**:
-  1. Many-to-Many mapping table `scheme_version_rules`.
-  2. Updating a rule increments `rule_version` (e.g., v1 -> v2).
-  3. All linked `SchemeVersion` records are flagged:
-     - `flagged_for_re_review = true`
-     - `re_review_reason = "Shared eligibility rule 'RULE_X' updated to v2 by admin"`
-  4. Live scheme published values and current published pointers **remain 100% untouched**.
-  5. Audit records are generated for each linked scheme.
-* **Benefit**: Transparent alert pipeline for departmental review without disruptive, silent mutations of live data.
+#### Assumption 1: Stateless Authentication with JWT & Direct SecurityContext Resolution
+* **What**: We chose stateless JWT authentication with roles (`STATE_REVIEWER`, `CENTRAL_REVIEWER`, `FIELD_AGENT`) embedded directly in token claims, extracting the identity from `Authentication.getName()`.
+* **Why**: Stateful HTTP sessions do not scale horizontally across multi-node Kubernetes clusters without sticky sessions or distributed session stores (like Redis session replication). Stateless JWT enables high-throughput horizontal scaling and simplifies zero-trust API security.
 
----
+#### Assumption 2: Maker-Checker Disqualifies Both `createdBy` AND `lastModifiedBy`
+* **What**: We assumed that if User A creates a draft, and User B modifies any field in that draft, **neither User A nor User B** can act as the Central Reviewer to approve and publish that version.
+* **Why**: If we only checked `createdBy`, a malicious reviewer could take an honest draft, inject fraudulent criteria or values as `lastModifiedBy`, and then approve it themselves. Checking both creator and last modifier guarantees complete Four-Eyes integrity.
 
-### Decision 4: Assignment Spec Field Compliance via Embeddable Value Objects
+#### Assumption 3: Copy-on-Write Version Branching for Published Schemes
+* **What**: We assumed that once a version is `PUBLISHED`, its fields are frozen and immutable forever. Any subsequent edit on the scheme branches a new `SchemeVersion` (e.g., v1 -> v2) in `DRAFT` status, pre-populated with the published version's fields and shared rules.
+* **Why**: Overwriting in-place destroys historical fidelity, creates read-write lock contention, and makes rollback impossible. Copy-on-write versioning guarantees that historical versions remain intact for audits and retroactive claim verifications.
 
-* The scheme fields strictly follow the required JSON structure:
-  ```json
-  {
-    "scheme_ref": "SCH_1001",
-    "field": "benefit_amount",
-    "value": "6000",
-    "evidence": {
-      "text": "Rs. 6000 per year in 3 installments",
-      "location": "Page 2, Section 3.1",
-      "source_url": "https://example.gov.in/scheme_doc.pdf",
-      "captured_date": "2026-10-30"
-    },
-    "confidence": "high",
-    "status": "found",
-    "note": "Extracted from official state notification"
-  }
-  ```
-* Implemented via `@Embeddable Evidence` and `@Entity SchemeField` with explicit enums (`ConfidenceLevel`, `FieldStatus`) supporting case-insensitive deserialization and custom string values.
+#### Assumption 4: Shared Rule Updates Must NOT Auto-Mutate Live Data
+* **What**: We assumed that when an administrator updates a shared rule (e.g., expanding land ceiling from 2.0 to 2.5 hectares), the live published scheme data must **not** automatically mutate. Instead, linked versions are marked with `flagged_for_re_review = true` and an audit record is logged.
+* **Why**: In government operations, statutory changes do not automatically apply to every individual welfare scheme without departmental budget allocation and formal notification. Auto-updating live data could trigger unlawful benefit disbursements. Human-in-the-loop review is a hard legal necessity.
+
+#### Assumption 5: Read/Write Traffic Asymmetry (99:1 Read-to-Write Ratio)
+* **What**: We assumed that field agent reads on live published schemes outnumber administrative draft writes by several orders of magnitude.
+* **Why**: Thousands of field workers and millions of citizens access scheme eligibility constantly throughout the day, while government policy updates occur intermittently (e.g., annual budgets, legislative sessions). Therefore, the read path is optimized for $O(1)$ pointer resolution and zero-lock execution.
+
+#### Assumption 6: Embedded Value Object for Field Evidence
+* **What**: We modeled `Evidence` as a JPA `@Embeddable` within `SchemeField` rather than a separate normalized table.
+* **Why**: Evidence (gazette text, page citation, document URL, captured date) is intrinsically bound to that specific field value evaluation. It has no independent lifecycle outside that field. Modeling it as an embeddable avoids unnecessary table joins and maximizes query performance.
 
 ---
 
-## 3. Walkthrough Questions & Answers for Interviewers
+## 4. End-to-End Walkthrough & Interviewer Q&A
 
-### Q1: How do you guarantee high-concurrency read consistency when field agents fetch schemes?
+### Q1: How does the system guarantee zero downtime and no dirty reads during concurrent editing?
 > **Answer**:  
-> In our architecture, the live read query is:
+> Through our **Immutable Read Pointer Architecture**:
 > ```sql
 > SELECT * FROM scheme_versions WHERE id = (SELECT current_published_version_id FROM schemes WHERE id = ?);
 > ```
-> Because `current_published_version_id` is an integer/bigint pointer to an already committed, immutable `SchemeVersion`, field agent reads:
-> 1. Never wait on row locks held by reviewers editing drafts.
-> 2. Experience zero dirty reads (`READ_COMMITTED` or `REPEATABLE_READ`).
-> 3. Can be cached indefinitely at the HTTP/CDN or Redis layer with the cache key `scheme:{id}:v{current_published_version_id}`. When a new version is published, only the cache key pointer is invalidated.
+> Live read requests (`GET /api/schemes/{id}/live`) only resolve the committed version pointed to by `current_published_version_id`.
+> When a State Reviewer edits fields, Hibernate executes updates on an uncommitted or draft `SchemeVersion` row (e.g., Version 2). The live pointer continues pointing to Version 1. Field agents experience:
+> 1. Zero lock waits (no shared or exclusive row lock conflicts with editors).
+> 2. Zero data leakage (draft values like proposed subsidy amounts never appear in live queries).
+> 3. Zero downtime during publishing: swapping `current_published_version_id = 2` is a single atomic SQL update inside a `@Transactional` block.
 
 ---
 
-### Q2: What prevents race conditions if two state reviewers attempt to edit the same scheme draft concurrently?
+### Q2: How does the Maker-Checker rule prevent privilege escalation or bypass?
 > **Answer**:  
-> 1. **Optimistic Locking**: In high-scale deployments, `@Version` on `SchemeVersion` prevents lost updates. If Reviewer A and Reviewer B attempt to modify fields in the same draft version simultaneously, Hibernate verifies the row version and throws `OptimisticLockException` for the slower transaction.
-> 2. **State Machine Locking**: Once a draft is submitted (`IN_REVIEW`), any modification request throws `InvalidStateTransitionException` until the central reviewer completes the evaluation.
+> 1. **Identity Extraction**: The user identity is extracted from the cryptographically verified JWT inside `SecurityContextHolder`, not from any request body parameter (which could be spoofed).
+> 2. **Dual-Role Trap Protection**: Even if a senior officer holds both `ROLE_STATE_REVIEWER` and `ROLE_CENTRAL_REVIEWER` authorities in their JWT, the domain logic inspects:
+>    ```java
+>    if (reviewer.equalsIgnoreCase(version.getCreatedBy()) || 
+>        (version.getLastModifiedBy() != null && reviewer.equalsIgnoreCase(version.getLastModifiedBy()))) {
+>        throw new MakerCheckerViolationException(...);
+>    }
+>    ```
+> 3. **Verification in Test Suite**: Verified by `MakerCheckerSecurityIntegrationTest.java`, where a user with Central Reviewer credentials attempts self-approval and is rejected with `MAKER_CHECKER_VIOLATION`.
 
 ---
 
-### Q3: Why Many-to-Many for Shared Eligibility Rules instead of duplicating rule definitions?
+### Q3: How would you scale this architecture to 50,000 schemes and 100,000 requests/second from field agents?
 > **Answer**:  
-> Welfare rules often have national statutory definitions (e.g., SECC 2011 criteria, PM-KISAN land ceilings, BPL criteria). Duplicating them across 500 scheme records leads to data drift and massive manual overhead during legislative amendments.  
-> With our normalized `shared_eligibility_rules` and `scheme_version_rules` join table:
-> - Central administrators maintain single sources of truth.
-> - An update triggers immediate cascading re-review notifications across all linked schemes.
-> - Historical scheme versions retain their exact rule mappings at the time of publication, preserving compliance history.
+> 1. **Database Read/Write Splitting**:
+>    - 99.9% of traffic (`GET /api/schemes/{id}/live`) is read-only.
+>    - Configure Spring Data JPA with `AbstractRoutingDataSource` to route all `@Transactional(readOnly = true)` methods to MySQL Read Replicas / AWS Aurora Read Replicas.
+> 2. **Distributed Redis Caching with Pointer Keys**:
+>    - Cache the JSON payload of the published version under the key `scheme:live:{schemeId}`.
+>    - Because published versions are immutable, cache TTL can be set to 24 hours.
+>    - When a Central Reviewer approves a new draft (`reviewAndDecide` with `APPROVE`), publish a Spring Application Event that evicts `scheme:live:{schemeId}` from Redis.
+> 3. **Asynchronous Audit Logging via CDC / Kafka**:
+>    - For 100k writes/sec, change `AuditService` from synchronous JPA writes to emitting events to an Apache Kafka topic, consumed asynchronously into an Elasticsearch or ClickHouse cluster for fast search and compliance reporting.
 
 ---
 
-### Q4: How would you scale this architecture to handle 50,000 schemes and 100,000 requests/sec from field agents?
+### Q4: How is database indexing optimized for scheme queries?
 > **Answer**:  
-> 1. **Read/Write Replica Splitting**: Route all `@Transactional(readOnly = true)` traffic (`/api/schemes/{id}/live`) to MySQL read replicas or Aurora Read Replicas using Spring's `AbstractRoutingDataSource`.
-> 2. **Distributed Cache (Redis)**:
->    - Cache the published scheme version DTO in Redis.
->    - Because published versions are immutable, cache TTL can be long (e.g., 24 hours).
->    - Upon `reviewAndDecide` with `APPROVE`, publish a cache eviction event over Spring ApplicationEvents or Redis Pub/Sub to invalidate `scheme:live:{id}`.
-> 3. **Asynchronous Audit Logging**:
->    - Currently, `AuditService` runs synchronously in the same transaction for immediate consistency.
->    - At 100k req/sec, we would emit `FieldChangedEvent` onto an Apache Kafka topic or Debezium CDC (Change Data Capture) pipeline, consuming into an Elasticsearch / OpenSearch cluster for audit queries and full-text search.
+> Explicit indexes were defined in `V1__init_schema.sql` and JPA entities:
+> - `schemes`: Unique index on `scheme_ref` for $O(1)$ lookups by business code (`SCH_1001`).
+> - `scheme_versions`: Composite index on `(scheme_id, status)` and index on `status` to instantly retrieve active drafts or published versions without table scans.
+> - `scheme_fields`: Index on `scheme_version_id` and `field_name` for fast field joining.
+> - `shared_eligibility_rules`: Unique index on `rule_code`.
+> - `audit_logs`: Indexes on `scheme_version_id` and `scheme_ref` for instant historical audit retrieval.
 
 ---
 
-### Q5: How is security tested and verified against malicious tampering?
-> **Answer**:  
-> The test suite includes dedicated integration tests covering every attack vector:
-> 1. `MakerCheckerSecurityIntegrationTest`: Simulates an authenticated user with reviewer credentials attempting to approve their own draft. Asserts `MakerCheckerViolationException` is thrown and the version remains unapproved.
-> 2. `SchemeControllerSecurityWebMvcTest`: Uses Spring MockMvc with JWT tokens to verify that `FIELD_AGENT` tokens receive `403 Forbidden` on modification endpoints, unauthenticated calls receive `401/403`, and only `STATE_REVIEWER` can create/edit drafts.
-> 3. `ImmutableReadVersionIsolationTest`: Verifies that concurrent edits in draft state create zero data leakage on live endpoints.
-> 4. `SharedRuleCascadingReReviewTest`: Verifies that updating a shared rule flags linked drafts while keeping live published data unchanged.
+## 5. Automated Test Suite Results (`mvn test`)
 
----
-
-## 4. Verification & Test Suite Execution
-
-Run the complete automated test suite:
-```powershell
-mvn clean test
 ```
-
-### Test Results Summary:
-```
-[INFO] Running org.haqdarshak.publishing.MakerCheckerSecurityIntegrationTest
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time: 0.81 s
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
 [INFO] Running org.haqdarshak.publishing.ImmutableReadVersionIsolationTest
 [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time: 0.35 s
-[INFO] Running org.haqdarshak.publishing.SharedRuleCascadingReReviewTest
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time: 0.16 s
+[INFO] Running org.haqdarshak.publishing.MakerCheckerSecurityIntegrationTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time: 0.81 s
 [INFO] Running org.haqdarshak.publishing.SchemeControllerSecurityWebMvcTest
 [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time: 4.96 s
+[INFO] Running org.haqdarshak.publishing.SharedRuleCascadingReReviewTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time: 0.16 s
 [INFO] 
 [INFO] Results:
 [INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
 ```
+
+---
+
+## 6. Ready-to-Copy Postman & cURL Documentation
+Refer to [**`POSTMAN_AND_CURLS.md`**](file:///c:/Users/Ankit/Desktop/Interview/POSTMAN_AND_CURLS.md) for 11 ready-to-run cURL commands covering tokens, scheme creation, field edits, maker-checker rejection, approval, live read isolation, and shared rule cascades.

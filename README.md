@@ -2,6 +2,10 @@
 
 An enterprise-grade, high-concurrency review and publishing backend for the Haqdarshak Scheme Knowledge Base built with **Spring Boot 3 (Java 21)**, **Spring Security**, **JPA/Hibernate**, and **MySQL**.
 
+**GitHub Repository**: [https://github.com/AnkitDeshpande/haqdarshak-assignment.git](https://github.com/AnkitDeshpande/haqdarshak-assignment.git)  
+**Postman & cURL Walkthrough**: [POSTMAN_AND_CURLS.md](POSTMAN_AND_CURLS.md)  
+**Interviewer Architecture Guide**: [INTERVIEWER_GUIDE.md](INTERVIEWER_GUIDE.md)  
+
 ---
 
 ## 🏛️ Architectural Overview
