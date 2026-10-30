@@ -1,0 +1,211 @@
+{
+  "info": {
+    "name": "Haqdarshak Scheme Review & Publish Backend",
+    "_postman_id": "haqdarshak-api-collection",
+    "description": "Postman Collection for Haqdarshak Scheme Knowledge Base Review and Publish Backend (Option S1)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Auth - Get Token (State Reviewer / Maker)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"state_reviewer_rahul\",\n  \"role\": \"STATE_REVIEWER\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "token"]
+        }
+      }
+    },
+    {
+      "name": "2. Auth - Get Token (Central Reviewer / Checker)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"central_reviewer_priya\",\n  \"role\": \"CENTRAL_REVIEWER\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "token"]
+        }
+      }
+    },
+    {
+      "name": "3. Auth - Get Token (Field Agent / Reader)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"field_agent_amit\",\n  \"role\": \"FIELD_AGENT\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "token"]
+        }
+      }
+    },
+    {
+      "name": "4. Rules - Create Shared Rule (Central Reviewer)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rule_code\": \"RULE_LAND_MARGINAL\",\n  \"rule_name\": \"Marginal Farmer Land Ceiling\",\n  \"description\": \"Cultivable land holding up to 2.0 hectares\",\n  \"criteria_json\": \"{\\\"max_land_hectares\\\": 2.0, \\\"category\\\": \\\"marginal\\\"}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/rules",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "rules"]
+        }
+      }
+    },
+    {
+      "name": "5. Schemes - Create Scheme & Draft v1 (State Reviewer)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"scheme_ref\": \"SCH_1001\",\n  \"name\": \"PM-KISAN Samman Nidhi\",\n  \"category\": \"Agriculture\",\n  \"state\": \"Central\",\n  \"shared_rule_codes\": [\"RULE_LAND_MARGINAL\"],\n  \"fields\": [\n    {\n      \"scheme_ref\": \"SCH_1001\",\n      \"field\": \"benefit_amount\",\n      \"value\": \"6000\",\n      \"evidence\": {\n        \"text\": \"Rs. 6000 per year in 3 installments of Rs. 2000 each\",\n        \"location\": \"Page 2, Section 3.1\",\n        \"source_url\": \"https://example.gov.in/pmkisan_guidelines.pdf\",\n        \"captured_date\": \"2026-10-30\"\n      },\n      \"confidence\": \"high\",\n      \"status\": \"found\",\n      \"note\": \"Extracted from official central notification\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes"]
+        }
+      }
+    },
+    {
+      "name": "6. Schemes - Update Draft Field (State Reviewer)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"field\": \"benefit_amount\",\n  \"value\": \"6000\",\n  \"evidence\": {\n    \"text\": \"Rs. 6000 per year disbursed directly to Aadhaar linked bank account\",\n    \"location\": \"Gazette Memo 2026 Section 4\",\n    \"source_url\": \"https://example.gov.in/pmkisan_amended.pdf\",\n    \"captured_date\": \"2026-10-30\"\n  },\n  \"confidence\": \"high\",\n  \"status\": \"found\",\n  \"note\": \"Aadhaar linking confirmed as mandatory\",\n  \"source_reference\": \"Official Gazette Notification #104\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/fields",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "fields"]
+        }
+      }
+    },
+    {
+      "name": "7. Schemes - Submit Draft for Review (State Reviewer)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/versions/1/submit",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "versions", "1", "submit"]
+        }
+      }
+    },
+    {
+      "name": "8. Schemes - Maker-Checker Violation Demo (Fails with 403)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"APPROVE\",\n  \"notes\": \"Attempting self-approval by maker\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/versions/1/review",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "versions", "1", "review"]
+        }
+      }
+    },
+    {
+      "name": "9. Schemes - Review & Approve (Central Reviewer)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"APPROVE\",\n  \"notes\": \"Verified against the Union Budget Gazette 2026. Approved for nationwide publishing.\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/versions/1/review",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "versions", "1", "review"]
+        }
+      }
+    },
+    {
+      "name": "10. Schemes - Get Live Published Scheme (Field Agent)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/live",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "live"]
+        }
+      }
+    },
+    {
+      "name": "11. Schemes - Get Scheme Audit Logs (Central Reviewer)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/schemes/1/audit",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "schemes", "1", "audit"]
+        }
+      }
+    }
+  ]
+}
